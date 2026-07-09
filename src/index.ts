@@ -1,14 +1,36 @@
-import { serve } from '@hono/node-server'
 import { Hono } from 'hono'
 import { createClient } from '@supabase/supabase-js'
-import 'dotenv/config'
 
 const app = new Hono()
 
-// Supabaseと接続する準備
-const supabaseUrl = process.env.SUPABASE_URL || ''
-const supabaseKey = process.env.SUPABASE_ANON_KEY || ''
-const supabase = createClient(supabaseUrl, supabaseKey)
+type Noodle = {
+  jan_code: string
+  name: string
+  cook_time?: number
+}
+
+// 環境変数の取得（Workers か Node の両方に対応）
+const getEnv = () => {
+  if (typeof process !== 'undefined' && process.env) {
+    return {
+      SUPABASE_URL: process.env.SUPABASE_URL || '',
+      SUPABASE_ANON_KEY: process.env.SUPABASE_ANON_KEY || ''
+    }
+  }
+  return {
+    SUPABASE_URL: (globalThis as any).SUPABASE_URL || '',
+    SUPABASE_ANON_KEY: (globalThis as any).SUPABASE_ANON_KEY || ''
+  }
+}
+
+let cachedSupabase: any = null
+const getSupabase = (): any => {
+  if (cachedSupabase) return cachedSupabase
+  const { SUPABASE_URL: supabaseUrl = '', SUPABASE_ANON_KEY: supabaseKey = '' } = getEnv()
+  if (!supabaseUrl) return null
+  cachedSupabase = createClient(supabaseUrl, supabaseKey)
+  return cachedSupabase
+}
 
 // 確認用のページ（http://localhost:3000/ にアクセスした時）
 app.get('/', (c) => {
@@ -21,7 +43,11 @@ app.get('/api/noodles/:jan_code', async (c) => {
   const janCode = c.req.param('jan_code')
 
   // 2. Supabaseの「noodles」テーブルから、jan_codeが一致するデータを検索
-  const { data, error } = await supabase
+  const supabase = getSupabase()
+  if (!supabase) {
+    return c.json({ error: 'Supabase が設定されていません (SUPABASE_URL を確認してください)' }, 500)
+  }
+  const { data, error } = await (supabase as any)
     .from('noodles')
     .select('*')
     .eq('jan_code', janCode)
@@ -33,17 +59,25 @@ app.get('/api/noodles/:jan_code', async (c) => {
   }
 
   // 4. 無事に見つかったら、必要なデータだけをJSON形式で返す
+  const noodle = data as Noodle
   return c.json({
-    jan_code: data.jan_code,
-    name: data.name,
-    time_minutes: data.cook_time  // ※ここで cooktime を取得しています
+    jan_code: noodle.jan_code,
+    name: noodle.name,
+    time_minutes: noodle.cook_time // ※ここで cooktime を取得しています
   })
 })
 
-const port = 3000
-console.log(`Server is running on port ${port}`)
+// Cloudflare Workers 用に `app.fetch` をエクスポート
+declare const addEventListener: any
 
-serve({
-  fetch: app.fetch,
-  port
-})
+if (typeof addEventListener !== 'undefined') {
+  addEventListener('fetch', (event: any) => {
+    event.respondWith(app.fetch(event.request))
+  })
+}
+
+export default app.fetch
+
+export async function fetch(request: Request, env: any, ctx: any) {
+  return app.fetch(request, env, ctx)
+}

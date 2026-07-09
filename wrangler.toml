@@ -1,3 +1,4 @@
 name = "noodle-api"
-main = "src/index.ts"
+main = "dist/index.js"
 compatibility_date = "2024-07-09"
+type = "esm"
